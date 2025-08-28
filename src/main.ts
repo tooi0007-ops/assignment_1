@@ -41,7 +41,10 @@ const Birb = {
 
 const Constants = {
     PIPE_WIDTH: 50,
-    TICK_RATE_MS: 500, // Might need to change this!
+    TICK_RATE_MS: 16,
+    GRAVITY: 0.5,           // pixel per tick^2
+    FLAP_VELOCITY: -5,      // pixel per tick (negative = upward)
+    PIPE_SPEED: 3,          // pixel per tick (pipes move left)
 } as const;
 
 // User input
@@ -51,11 +54,23 @@ type Key = "Space";
 // State processing
 
 type State = Readonly<{
+    gameStarted: boolean;
     gameEnd: boolean;
+    gameTime: number;
+    birdY: number;
+    birdVy: number;
+    lives: number;
+    score: number;
 }>;
 
 const initialState: State = {
+    gameStarted: false,
     gameEnd: false,
+    gameTime: 0,
+    birdY: Viewport.CANVAS_HEIGHT / 2,
+    birdVy: 0,
+    lives: 3,
+    score: 0,
 };
 
 /**
@@ -184,7 +199,7 @@ export const state$ = (csvContents: string): Observable<State> => {
     /** Determines the rate of time steps */
     const tick$ = interval(Constants.TICK_RATE_MS);
 
-    return tick$.pipe(scan((s: State) => ({ gameEnd: false }), initialState));
+    return tick$.pipe(scan((s: State) => s, initialState));
 };
 
 // The following simply runs your main function on window load.  Make sure to leave it in place.
