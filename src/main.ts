@@ -54,7 +54,7 @@ type Key = "Space";
 
 // State processing
 type PipeData = Readonly<{ time: number; gapY: number; gapH: number }>;
-type LivePipe = Readonly<{ id: number; x: number; gapYpx: number; gapHpx: number }>;
+type LivePipe = Readonly<{ id: number; x: number; gapYpx: number; gapHpx: number;}>;
 
 function parseCsv(csv: string): readonly PipeData[] {
   const lines = csv.trim().split('\n').slice(1); // skip header
@@ -132,6 +132,8 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
         gameTime: t,
         birdVy: vy,
         birdY: yClamped,
+        pipes: moved,          // keep moved pipes
+        nextPipeIdx: next      // remember where we are in the CSV
     };
 };
 // Rendering (side effects)
@@ -205,11 +207,16 @@ const render = (): ((s: State) => void) => {
      * @param s Current state
      */
     return (s: State) => {
+        const existingBird = svg.querySelector('#bird');
+        if (existingBird) {
+        existingBird.remove();
+        }
         // Add birb to the main grid canvas
         const birdImg = createSvgElement(svg.namespaceURI, "image", {
+            id: "bird",
             href: "assets/birb.png",
             x: `${Viewport.CANVAS_WIDTH * 0.3 - Birb.WIDTH / 2}`,
-            y: `${Viewport.CANVAS_HEIGHT / 2 - Birb.HEIGHT / 2}`,
+            y: `${s.birdY - Birb.HEIGHT / 2}`,
             width: `${Birb.WIDTH}`,
             height: `${Birb.HEIGHT}`,
         });
@@ -217,6 +224,7 @@ const render = (): ((s: State) => void) => {
 
         const existingPipes = svg.querySelectorAll(".pipe");
         existingPipes.forEach(p => p.remove());
+
         s.pipes.forEach(pipe => {
 
         // Top pipe
