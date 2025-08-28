@@ -54,7 +54,7 @@ type Key = "Space";
 
 // State processing
 type PipeData = Readonly<{ time: number; gapY: number; gapH: number }>;
-type LivePipe = Readonly<{ id: number; x: number; gapYpx: number; gapHpx: number;}>;
+type LivePipe = Readonly<{ id: number; x: number; gapYpx: number; gapHpx: number; passed?: boolean;}>;
 
 function parseCsv(csv: string): readonly PipeData[] {
   const lines = csv.trim().split('\n').slice(1); // skip header
@@ -75,6 +75,7 @@ type State = Readonly<{
     score: number;
     pipes: readonly LivePipe[];
     nextPipeIdx: number;
+    collisionCooldown?: number;
 }>;
 
 const initialState: State = {
@@ -87,6 +88,7 @@ const initialState: State = {
     score: 0,
     pipes: [],
     nextPipeIdx: 0,
+    collisionCooldown: 0,
 };
 
 /**
@@ -111,6 +113,7 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
         x: Viewport.CANVAS_WIDTH,
         gapYpx: p.gapY * Viewport.CANVAS_HEIGHT,
         gapHpx: p.gapH * Viewport.CANVAS_HEIGHT,
+        passed: false,
         });
         next++;
     }
@@ -127,13 +130,63 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
     const bot = Viewport.CANVAS_HEIGHT - Birb.HEIGHT / 2;
     const yClamped = Math.max(top, Math.min(bot, y));
 
+      // bird AABB (axis-aligned bounding box)
+  const bx = Viewport.CANVAS_WIDTH * 0.3;
+  const L = bx - Birb.WIDTH / 2;
+  const R = bx + Birb.WIDTH / 2;
+  const T = yClamped - Birb.HEIGHT / 2;
+  const B = yClamped + Birb.HEIGHT / 2;
+
+  // fold pipes → collisions + scoring
+  let hit = false;
+  let scoreInc = 0;
+  const updatedPipes = moved.map(p => {
+    const left   = p.x;
+    const right  = p.x + Constants.PIPE_WIDTH;
+    const gapTop = p.gapYpx - p.gapHpx / 2;
+    const gapBot = p.gapYpx + p.gapHpx / 2;
+
+    const overlapX = R > left && L < right;
+    const hitTop    = overlapX && T < gapTop;
+    const hitBottom = overlapX && B > gapBot;
+
+    hit = hit || hitTop || hitBottom;
+
+    const justPassed = !p.passed && L > right;
+    if (justPassed) scoreInc += 1;
+
+    return justPassed ? { ...p, passed: true } : p;
+  });
+
+  // also count top/bottom screen as collisions (spec)
+  const screenHitTop = y < top;
+  const screenHitBot = y > bot;
+  hit = hit || screenHitTop || screenHitBot;
+
+  // collision cooldown (invulnerability window)
+  const cdNext = Math.max(0, (s.collisionCooldown ?? 0) - Constants.TICK_RATE_MS);
+  const consumeLife = cdNext <= 0 && hit && s.lives > 0;
+
+  const livesNext = consumeLife ? s.lives - 1 : s.lives;
+  const cdOut     = consumeLife ? 600 : cdNext; // ~0.6s i-frames
+  const scoreNext = s.score + scoreInc;
+
+  // end when lives exhausted OR finished all pipes and none left on screen
+  const gameEnd =
+    livesNext <= 0 ||
+    (next >= sched.length && updatedPipes.length === 0);
+
     return {
         ...s,
         gameTime: t,
         birdVy: vy,
         birdY: yClamped,
-        pipes: moved,          // keep moved pipes
-        nextPipeIdx: next      // remember where we are in the CSV
+        pipes: updatedPipes,          // keep moved pipes
+        nextPipeIdx: next,      // remember where we are in the CSV
+        lives: livesNext,
+        score: scoreNext,
+        gameEnd,
+        collisionCooldown: cdOut,
     };
 };
 // Rendering (side effects)
@@ -221,6 +274,11 @@ const render = (): ((s: State) => void) => {
             height: `${Birb.HEIGHT}`,
         });
         svg.appendChild(birdImg);
+
+        // Update lives and score text
+        if (livesText) livesText.textContent = `${s.lives}`;
+        if (scoreText) scoreText.textContent = `${s.score}`;
+
 
         const existingPipes = svg.querySelectorAll(".pipe");
         existingPipes.forEach(p => p.remove());
