@@ -24,6 +24,7 @@ import {
     scan,
     switchMap,
     take,
+    merge
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
 
@@ -52,6 +53,17 @@ const Constants = {
 type Key = "Space";
 
 // State processing
+type PipeData = Readonly<{ time: number; gapY: number; gapH: number }>;
+type LivePipe = Readonly<{ id: number; x: number; gapYpx: number; gapHpx: number }>;
+
+function parseCsv(csv: string): readonly PipeData[] {
+  const lines = csv.trim().split('\n').slice(1); // skip header
+  return lines.map(line => {
+    const [gapY, gapH, time] = line.split(',').map(Number);
+    return { gapY, gapH, time };
+  });
+}
+
 
 type State = Readonly<{
     gameStarted: boolean;
@@ -61,6 +73,8 @@ type State = Readonly<{
     birdVy: number;
     lives: number;
     score: number;
+    pipes: readonly LivePipe[];
+    nextPipeIdx: number;
 }>;
 
 const initialState: State = {
@@ -71,6 +85,8 @@ const initialState: State = {
     birdVy: 0,
     lives: 3,
     score: 0,
+    pipes: [],
+    nextPipeIdx: 0,
 };
 
 /**
@@ -79,8 +95,45 @@ const initialState: State = {
  * @param s Current state
  * @returns Updated state
  */
-const tick = (s: State) => s;
+const tick = (s: State, sched: readonly PipeData[]): State => {
+    if (s.gameEnd) return s;
 
+    const t  = s.gameTime + 1;
+
+    const ticksToSec = (ticks: number) => (ticks * Constants.TICK_RATE_MS) / 1000;
+    let next = s.nextPipeIdx;
+    const spawned: LivePipe[] = [...s.pipes];
+
+    while (next < sched.length && sched[next].time <= ticksToSec(t)) {
+        const p = sched[next];
+        spawned.push({
+        id: next,
+        x: Viewport.CANVAS_WIDTH,
+        gapYpx: p.gapY * Viewport.CANVAS_HEIGHT,
+        gapHpx: p.gapH * Viewport.CANVAS_HEIGHT,
+        });
+        next++;
+    }
+
+    // move & cull
+    const moved = spawned
+        .map(p => ({ ...p, x: p.x - Constants.PIPE_SPEED }))
+        .filter(p => p.x + Constants.PIPE_WIDTH >= 0);
+        
+    const vy = s.birdVy + Constants.GRAVITY;
+    const y  = s.birdY + vy;
+
+    const top = Birb.HEIGHT / 2;
+    const bot = Viewport.CANVAS_HEIGHT - Birb.HEIGHT / 2;
+    const yClamped = Math.max(top, Math.min(bot, y));
+
+    return {
+        ...s,
+        gameTime: t,
+        birdVy: vy,
+        birdY: yClamped,
+    };
+};
 // Rendering (side effects)
 
 /**
@@ -191,15 +244,28 @@ const render = (): ((s: State) => void) => {
 
 export const state$ = (csvContents: string): Observable<State> => {
     /** User input */
+    const sched = parseCsv(csvContents);
 
     const key$ = fromEvent<KeyboardEvent>(document, "keypress");
     const fromKey = (keyCode: Key) =>
         key$.pipe(filter(({ code }) => code === keyCode));
 
-    /** Determines the rate of time steps */
-    const tick$ = interval(Constants.TICK_RATE_MS);
+    const flap$ = fromKey("Space").pipe(
+        map(() => (s: State) => ({
+            ...s,
+            gameStarted: true,
+            birdVy: Constants.FLAP_VELOCITY
+        }))
+    );
 
-    return tick$.pipe(scan((s: State) => s, initialState));
+    /** Determines the rate of time steps */
+    const tick$ = interval(Constants.TICK_RATE_MS).pipe(
+        map(() => (s: State) => tick(s, sched))
+    );
+
+    return merge(tick$, flap$).pipe(
+        scan((s, f) => f(s), initialState)
+    );
 };
 
 // The following simply runs your main function on window load.  Make sure to leave it in place.
