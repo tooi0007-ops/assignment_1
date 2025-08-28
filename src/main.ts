@@ -215,30 +215,33 @@ const render = (): ((s: State) => void) => {
         });
         svg.appendChild(birdImg);
 
-        // Draw a static pipe as a demonstration
-        const pipeGapY = 200; // vertical center of the gap
-        const pipeGapHeight = 100;
+        const existingPipes = svg.querySelectorAll(".pipe");
+        existingPipes.forEach(p => p.remove());
+        s.pipes.forEach(pipe => {
 
         // Top pipe
         const pipeTop = createSvgElement(svg.namespaceURI, "rect", {
-            x: "150",
+            class: "pipe",
+            x: `${pipe.x}`,
             y: "0",
             width: `${Constants.PIPE_WIDTH}`,
-            height: `${pipeGapY - pipeGapHeight / 2}`,
+            height: `${pipe.gapYpx - pipe.gapHpx / 2}`,
             fill: "green",
         });
 
         // Bottom pipe
         const pipeBottom = createSvgElement(svg.namespaceURI, "rect", {
-            x: "150",
-            y: `${pipeGapY + pipeGapHeight / 2}`,
+            class: "pipe",
+            x: `${pipe.x}`,
+            y: `${pipe.gapYpx + pipe.gapHpx / 2}`,
             width: `${Constants.PIPE_WIDTH}`,
-            height: `${Viewport.CANVAS_HEIGHT - (pipeGapY + pipeGapHeight / 2)}`,
+            height: `${Viewport.CANVAS_HEIGHT - (pipe.gapYpx + pipe.gapHpx / 2)}`,
             fill: "green",
         });
 
         svg.appendChild(pipeTop);
         svg.appendChild(pipeBottom);
+        });
     };
 };
 
