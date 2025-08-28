@@ -7,23 +7,30 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Build artifacts
+node_modules/
+dist/
+dist-ssr/
+assets/build/
+assets/dist/
+assets/Linux/
+*Zone.Identifier
+
+# Local env & misc
 *.local
 
-# Editor directories and files
+# Editor / IDE settings
 .vscode/*
 !.vscode/extensions.json
 !.vscode/settings.json
-.idea
+.idea/
 .DS_Store
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
-assets/build
-assets/dist
-assets/Linux
-*Zone.Identifier
+
+# Project packaging
+*.zip
+*.code-workspace
