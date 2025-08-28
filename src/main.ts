@@ -48,6 +48,26 @@ const Constants = {
     PIPE_SPEED: 3,          // pixel per tick (pipes move left)
 } as const;
 
+abstract class RNG {
+  private static m = 0x80000000; // 2^31
+  private static a = 1103515245;
+  private static c = 12345;
+
+  static hash(seed: number): number {
+    return (RNG.a * seed + RNG.c) % RNG.m;
+  }
+  static scale(hash: number): number {
+    return (2 * hash) / (RNG.m - 1) - 1; // [-1, 1]
+  }
+}
+
+/** Bounce magnitude in [4, 8] derived from a seed (pure) */
+function generateBounceVelocity(seed: number): number {
+  const h = RNG.hash(seed);
+  const scaled = RNG.scale(h);      // [-1, 1]
+  return 4 + Math.abs(scaled) * 4;  // [4, 8]
+}
+
 // User input
 
 type Key = "Space";
@@ -75,7 +95,7 @@ type State = Readonly<{
     score: number;
     pipes: readonly LivePipe[];
     nextPipeIdx: number;
-    collisionCooldown?: number;
+    collisionCooldown: number;
 }>;
 
 const initialState: State = {
@@ -131,62 +151,85 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
     const yClamped = Math.max(top, Math.min(bot, y));
 
       // bird AABB (axis-aligned bounding box)
-  const bx = Viewport.CANVAS_WIDTH * 0.3;
-  const L = bx - Birb.WIDTH / 2;
-  const R = bx + Birb.WIDTH / 2;
-  const T = yClamped - Birb.HEIGHT / 2;
-  const B = yClamped + Birb.HEIGHT / 2;
+    const bx = Viewport.CANVAS_WIDTH * 0.3;
+    const L = bx - Birb.WIDTH / 2;
+    const R = bx + Birb.WIDTH / 2;
+    const T = yClamped - Birb.HEIGHT / 2;
+    const B = yClamped + Birb.HEIGHT / 2;
 
-  // fold pipes → collisions + scoring
-  let hit = false;
-  let scoreInc = 0;
-  const updatedPipes = moved.map(p => {
-    const left   = p.x;
-    const right  = p.x + Constants.PIPE_WIDTH;
-    const gapTop = p.gapYpx - p.gapHpx / 2;
-    const gapBot = p.gapYpx + p.gapHpx / 2;
+    // fold pipes → collisions + scoring
+    let hit = false;
+    let scoreInc = 0;
+    const updatedPipes = moved.map(p => {
+        const left   = p.x;
+        const right  = p.x + Constants.PIPE_WIDTH;
+        const gapTop = p.gapYpx - p.gapHpx / 2;
+        const gapBot = p.gapYpx + p.gapHpx / 2;
 
-    const overlapX = R > left && L < right;
-    const hitTop    = overlapX && T < gapTop;
-    const hitBottom = overlapX && B > gapBot;
+        const overlapX = R > left && L < right;
+        const hitTop    = overlapX && T < gapTop;
+        const hitBottom = overlapX && B > gapBot;
 
-    hit = hit || hitTop || hitBottom;
+        hit = hit || hitTop || hitBottom;
 
-    const justPassed = !p.passed && L > right;
-    if (justPassed) scoreInc += 1;
+        const justPassed = !p.passed && L > right;
+        if (justPassed) scoreInc += 1;
 
-    return justPassed ? { ...p, passed: true } : p;
-  });
+        return justPassed ? { ...p, passed: true } : p;
+    });
 
-  // also count top/bottom screen as collisions (spec)
-  const screenHitTop = y < top;
-  const screenHitBot = y > bot;
-  hit = hit || screenHitTop || screenHitBot;
+    // also count top/bottom screen as collisions (spec)
+    const screenHitTop = y < top;
+    const screenHitBot = y > bot;
+    hit = hit || screenHitTop || screenHitBot;
 
-  // collision cooldown (invulnerability window)
-  const cdNext = Math.max(0, (s.collisionCooldown ?? 0) - Constants.TICK_RATE_MS);
-  const consumeLife = cdNext <= 0 && hit && s.lives > 0;
+    // collision cooldown (invulnerability window)
+    const nextCooldown = Math.max(0, s.collisionCooldown - Constants.TICK_RATE_MS);
+    const collisionOccurred = (hit || screenHitTop || screenHitBot);
+    const shouldConsumeLife = nextCooldown <= 0 && collisionOccurred && s.lives > 0;
 
-  const livesNext = consumeLife ? s.lives - 1 : s.lives;
-  const cdOut     = consumeLife ? 600 : cdNext; // ~0.6s i-frames
-  const scoreNext = s.score + scoreInc;
+    let birdVelocityNext = vy;
+    let livesRemaining = s.lives;
+    let cooldownRemaining = nextCooldown;
 
-  // end when lives exhausted OR finished all pipes and none left on screen
-  const gameEnd =
-    livesNext <= 0 ||
-    (next >= sched.length && updatedPipes.length === 0);
+    if (shouldConsumeLife) {
+        livesRemaining = s.lives - 1;
+        cooldownRemaining = 600;
+
+        const seed = Math.floor(t * 997 + s.score * 101 + s.lives * 13);
+        const bounceMagnitude = generateBounceVelocity(seed);
+
+        const collidedWithTopHalf =
+        (y < top) ||
+        updatedPipes.some(pipe => {
+            const pipeLeft = pipe.x;
+            const pipeRight = pipe.x + Constants.PIPE_WIDTH;
+            const overlapX = R > pipeLeft && L < pipeRight;
+            const gapTop = pipe.gapYpx - pipe.gapHpx / 2;
+            return overlapX && T < gapTop;
+        });
+
+        birdVelocityNext = collidedWithTopHalf ? +bounceMagnitude : -bounceMagnitude;
+    }
+
+    const scoreNext = s.score + scoreInc;
+
+    // end when lives exhausted OR finished all pipes and none left on screen
+    const gameEnd =
+        livesRemaining <= 0 ||
+        (next >= sched.length && updatedPipes.length === 0);
 
     return {
         ...s,
         gameTime: t,
-        birdVy: vy,
+        birdVy: birdVelocityNext,
         birdY: yClamped,
-        pipes: updatedPipes,          // keep moved pipes
-        nextPipeIdx: next,      // remember where we are in the CSV
-        lives: livesNext,
+        pipes: updatedPipes,            // keep moved pipes
+        nextPipeIdx: next,              // remember where we are in the CSV
+        lives: livesRemaining,
         score: scoreNext,
         gameEnd,
-        collisionCooldown: cdOut,
+        collisionCooldown: cooldownRemaining,
     };
 };
 // Rendering (side effects)
