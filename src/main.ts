@@ -430,7 +430,7 @@ if (typeof window !== "undefined") {
     csv$.pipe(
         switchMap(contents =>
             // On click - start the game
-        click$.pipe(switchMap(() => state$(contents)))
-        )
+            click$.pipe(switchMap(() => state$(contents))),
+        ),
     ).subscribe(render());
 }
