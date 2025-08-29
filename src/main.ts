@@ -24,7 +24,8 @@ import {
     scan,
     switchMap,
     take,
-    merge
+    merge,
+    startWith
 } from "rxjs";
 import { fromFetch } from "rxjs/fetch";
 
@@ -49,23 +50,23 @@ const Constants = {
 } as const;
 
 abstract class RNG {
-  private static m = 0x80000000; // 2^31
-  private static a = 1103515245;
-  private static c = 12345;
+    private static m = 0x80000000; // 2^31
+    private static a = 1103515245;
+    private static c = 12345;
 
-  static hash(seed: number): number {
-    return (RNG.a * seed + RNG.c) % RNG.m;
-  }
-  static scale(hash: number): number {
-    return (2 * hash) / (RNG.m - 1) - 1; // [-1, 1]
-  }
+    static hash(seed: number): number {
+        return (RNG.a * seed + RNG.c) % RNG.m;
+    }
+    static scale(hash: number): number {
+        return (2 * hash) / (RNG.m - 1) - 1; // [-1, 1]
+    }
 }
 
 /** Bounce magnitude in [4, 8] derived from a seed (pure) */
 function generateBounceVelocity(seed: number): number {
-  const h = RNG.hash(seed);
-  const scaled = RNG.scale(h);      // [-1, 1]
-  return 4 + Math.abs(scaled) * 4;  // [4, 8]
+    const h = RNG.hash(seed);
+    const scaled = RNG.scale(h);      // [-1, 1]
+    return 4 + Math.abs(scaled) * 4;  // [4, 8]
 }
 
 // User input
@@ -77,11 +78,11 @@ type PipeData = Readonly<{ time: number; gapY: number; gapH: number }>;
 type LivePipe = Readonly<{ id: number; x: number; gapYpx: number; gapHpx: number; passed?: boolean;}>;
 
 function parseCsv(csv: string): readonly PipeData[] {
-  const lines = csv.trim().split('\n').slice(1); // skip header
-  return lines.map(line => {
-    const [gapY, gapH, time] = line.split(',').map(Number);
-    return { gapY, gapH, time };
-  });
+    const lines = csv.trim().split('\n').slice(1); // skip header
+    return lines.map(line => {
+        const [gapY, gapH, time] = line.split(',').map(Number);
+        return { gapY, gapH, time };
+    });
 }
 
 
@@ -232,6 +233,27 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
         collisionCooldown: cooldownRemaining,
     };
 };
+
+// ---- Actions & reducer (place this right after tick, before rendering) ----
+type Action =
+  | { type: "tick" }
+  | { type: "flap" }
+  | { type: "restart" };
+
+const createReducer = (sched: readonly PipeData[]) =>
+    (s: State, a: Action): State => {
+        switch (a.type) {
+        case "tick":
+            return tick(s, sched);
+        case "flap":
+            return { ...s, gameStarted: true, birdVy: Constants.FLAP_VELOCITY };
+        case "restart":
+            return s.gameEnd ? { ...initialState } : s;
+        default:
+            return s;
+        }
+    };
+
 // Rendering (side effects)
 
 /**
@@ -357,26 +379,26 @@ const render = (): ((s: State) => void) => {
 export const state$ = (csvContents: string): Observable<State> => {
     /** User input */
     const sched = parseCsv(csvContents);
+    const reducer = createReducer(sched);
 
     const key$ = fromEvent<KeyboardEvent>(document, "keypress");
     const fromKey = (keyCode: Key) =>
         key$.pipe(filter(({ code }) => code === keyCode));
 
-    const flap$ = fromKey("Space").pipe(
-        map(() => (s: State) => ({
-            ...s,
-            gameStarted: true,
-            birdVy: Constants.FLAP_VELOCITY
-        }))
+    const flap$: Observable<Action> =
+        fromKey("Space").pipe(map(() => ({ type: "flap" as const })));
+
+    const tick$: Observable<Action> =
+        interval(Constants.TICK_RATE_MS).pipe(map(() => ({ type: "tick" as const })));
+
+    const keyDown$ = fromEvent<KeyboardEvent>(document, "keydown");
+    const restart$ = keyDown$.pipe(
+        filter(e => e.code === "KeyR"),
+        map(() => ({ type: "restart" as const }))
     );
 
-    /** Determines the rate of time steps */
-    const tick$ = interval(Constants.TICK_RATE_MS).pipe(
-        map(() => (s: State) => tick(s, sched))
-    );
-
-    return merge(tick$, flap$).pipe(
-        scan((s, f) => f(s), initialState)
+    return merge(tick$, flap$,restart$).pipe(
+        scan(reducer, initialState)
     );
 };
 
@@ -408,7 +430,7 @@ if (typeof window !== "undefined") {
     csv$.pipe(
         switchMap(contents =>
             // On click - start the game
-            click$.pipe(switchMap(() => state$(contents))),
-        ),
+        click$.pipe(switchMap(() => state$(contents)))
+        )
     ).subscribe(render());
 }
