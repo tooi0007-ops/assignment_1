@@ -51,7 +51,7 @@ const Constants = {
     TICK_RATE_MS: 16,
     GRAVITY: 0.5,           // pixel per tick^2
     FLAP_VELOCITY: -5,      // pixel per tick (negative = upward)
-    PIPE_SPEED: 3,          // pixel per tick (pipes move left)
+    PIPE_SPEED: 5,          // pixel per tick (pipes move left)
 } as const;
 
 abstract class RNG {
@@ -113,7 +113,7 @@ type State = Readonly<{
     score: number;
     pipes: readonly LivePipe[];
     nextPipeIdx: number;
-    collisionCooldown: number;
+    inContact: boolean;
 }>;
 
 const initialState: State = {
@@ -126,7 +126,7 @@ const initialState: State = {
     score: 0,
     pipes: [],
     nextPipeIdx: 0,
-    collisionCooldown: 0,
+    inContact: false,
 };
 
 /**
@@ -219,39 +219,35 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
     const screenHitBot = y > bot;                         // Would be below bottom if unclamped
     hit = hit || screenHitTop || screenHitBot;            // Merge screen-edge collisions
 
-    // Collision cooldown: small invulnerability window to avoid life-drain per frame
-    const nextCooldown = Math.max(0, s.collisionCooldown - Constants.TICK_RATE_MS); // Decrement cooldown to 0
-    const collisionOccurred = (hit || screenHitTop || screenHitBot); // Did anything collide this tick?
-    const shouldConsumeLife = nextCooldown <= 0 && collisionOccurred && s.lives > 0; // Eligible to lose a life?
+    // Collision detection already produced: hit, screenHitTop, screenHitBot
+    const collisionOccurred = hit || screenHitTop || screenHitBot;
 
-    // Prepare next-frame values (may be overridden if life is consumed)
-    let birdVelocityNext = vy;                            // Default: keep physics velocity
-    let livesRemaining   = s.lives;                       // Default: no life lost
-    let cooldownRemaining = nextCooldown;                 // Default: keep ticking cooldown
+    // Edge trigger: life is consumed only when we *enter* contact
+    const shouldConsumeLife = !s.inContact && collisionOccurred && s.lives > 0;
 
-    if (shouldConsumeLife) {                              // On life loss…
-        livesRemaining = s.lives - 1;                       // Decrement lives
-        cooldownRemaining = 600;                            // Set ~0.6s invulnerability
+    let birdVelocityNext = vy;
+    let livesRemaining   = s.lives;
 
-        const seed = Math.floor(t * 997 + s.score * 101 + s.lives * 13); // Deterministic seed for bounce
-        const bounceMagnitude = generateBounceVelocity(seed);            // Randomized bounce speed [4,8]
+    if (shouldConsumeLife) {
+    livesRemaining = s.lives - 1;
 
-        // Determine which half the collision happened in (top → bounce down, bottom → bounce up)
-        const collidedWithTopHalf =
-        (y < top) ||                                        // Screen top
-        updatedPipes.some(pipe => {                         // Or pipe’s top half
-            const pipeLeft  = pipe.x;
-            const pipeRight = pipe.x + Constants.PIPE_WIDTH;
-            const overlapX  = R > pipeLeft && L < pipeRight;
-            const gapTop    = pipe.gapYpx - pipe.gapHpx / 2;
-            return overlapX && T < gapTop;
+    const seed = Math.floor(t * 997 + s.score * 101 + s.lives * 13);
+    const bounceMagnitude = generateBounceVelocity(seed);
+
+    const collidedWithTopHalf =
+        (y < top) ||
+        updatedPipes.some(pipe => {
+        const left  = pipe.x, right = pipe.x + Constants.PIPE_WIDTH;
+        const overlapX = R > left && L < right;
+        const gapTop = pipe.gapYpx - pipe.gapHpx / 2;
+        return overlapX && T < gapTop;
         });
 
-        birdVelocityNext = collidedWithTopHalf                // Apply bounce direction
-        ? +bounceMagnitude                                  // Top collision → push down
-        : -bounceMagnitude;                                 // Bottom collision → push up
+    birdVelocityNext = collidedWithTopHalf ? +bounceMagnitude : -bounceMagnitude;
     }
 
+    // next contact state: stay latched while colliding
+    const inContactNext = collisionOccurred;
     const scoreNext = s.score + scoreInc;                 // Apply any score gained this frame
 
     // End when out of lives OR no more pipes to spawn and none left on screen
@@ -269,7 +265,7 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
         lives: livesRemaining,                              // Updated lives
         score: scoreNext,                                   // Updated score
         gameEnd,                                            // Whether game is over now
-        collisionCooldown: cooldownRemaining,               // Updated i-frames timer
+        inContact: inContactNext,
     };
 };
 
@@ -409,15 +405,10 @@ export const state$ = (csvContents: string): Observable<State> => {
   const sched = parseCsv(csvContents);
 
   const runGame = (): Observable<State> => {
-    const keydown$ = fromEvent<KeyboardEvent>(window, "keydown", { capture: true });
-
-    const space$ = keydown$.pipe(
-    filter(e => e.code === "Space" || e.key === " "),
-    tap(e => e.preventDefault())     // stop browser scroll
-    );
-
-    const flap$ = space$.pipe(
-    map(() => (s: State) => ({ ...s, gameStarted: true, birdVy: Constants.FLAP_VELOCITY }))
+    const key$  = fromEvent<KeyboardEvent>(document, "keydown");
+    const flap$ = key$.pipe(
+      filter(e => e.code === "Space"),
+      map(() => (s: State) => ({ ...s, gameStarted: true, birdVy: Constants.FLAP_VELOCITY }))
     );
     const tick$ = interval(Constants.TICK_RATE_MS).pipe(
       map(() => (s: State) => tick(s, sched))
