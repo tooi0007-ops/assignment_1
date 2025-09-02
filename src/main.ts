@@ -196,59 +196,48 @@ const tick = (s: State, sched: readonly PipeData[]): State => {
     const overlapX     = R > left && L < right;
     const hitThisPipe  = overlapX && (T < gapTop || B > gapBot); // collided this frame?
 
-    // persist “ever touched” status
-    const touched = (p.touched ?? false) || hitThisPipe;
-
+    const touched = (p.touched ?? false) || hitThisPipe; // sticky once true
     hit = hit || hitThisPipe;
 
-    // passed = bird's left edge moved beyond pipe's right edge
-    const justPassed = !p.passed && L > right;
-
-    // score only if passed AND never touched this pipe
+    const justPassed = !p.passed && L > right;           // left edge cleared pipe
     if (justPassed && !touched) scoreInc += 1;
 
-    return {
-        ...p,
-        passed: p.passed || justPassed,
-        touched
-    };
+    return { ...p, passed: p.passed || justPassed, touched };
     });
 
-    // Also count screen edges as collisions (spec requirement)
-    const screenHitTop = y < top;                         // Would be above top if unclamped
-    const screenHitBot = y > bot;                         // Would be below bottom if unclamped
-    hit = hit || screenHitTop || screenHitBot;            // Merge screen-edge collisions
+    // Also count would-be screen exits as collisions
+    const screenHitTop = y < top;
+    const screenHitBot = y > bot;
+    hit = hit || screenHitTop || screenHitBot; // merge edge collisions
 
-    // Collision detection already produced: hit, screenHitTop, screenHitBot
-    const collisionOccurred = hit || screenHitTop || screenHitBot;
-
-    // Edge trigger: life is consumed only when we *enter* contact
-    const shouldConsumeLife = !s.inContact && collisionOccurred && s.lives > 0;
+    // === Edge-trigger life loss (uses contact latch) ===
+    const shouldConsumeLife = !s.inContact && hit && s.lives > 0;
 
     let birdVelocityNext = vy;
     let livesRemaining   = s.lives;
 
     if (shouldConsumeLife) {
-    livesRemaining = s.lives - 1;
+        livesRemaining = s.lives - 1;
 
-    const seed = Math.floor(t * 997 + s.score * 101 + s.lives * 13);
-    const bounceMagnitude = generateBounceVelocity(seed);
+        // Deterministic bounce strength
+        const seed = Math.floor(t * 997 + s.score * 101 + s.lives * 13);
+        const bounceMagnitude = generateBounceVelocity(seed);
 
-    const collidedWithTopHalf =
+        // Decide bounce direction (top vs bottom contact)
+        const collidedWithTopHalf =
         (y < top) ||
         updatedPipes.some(pipe => {
-        const left  = pipe.x, right = pipe.x + Constants.PIPE_WIDTH;
-        const overlapX = R > left && L < right;
-        const gapTop = pipe.gapYpx - pipe.gapHpx / 2;
-        return overlapX && T < gapTop;
+            const left  = pipe.x, right = pipe.x + Constants.PIPE_WIDTH;
+            const overlapX = R > left && L < right;
+            const gapTop = pipe.gapYpx - pipe.gapHpx / 2;
+            return overlapX && T < gapTop;
         });
 
-    birdVelocityNext = collidedWithTopHalf ? +bounceMagnitude : -bounceMagnitude;
+        birdVelocityNext = collidedWithTopHalf ? +bounceMagnitude : -bounceMagnitude;
     }
 
-    // next contact state: stay latched while colliding
-    const inContactNext = collisionOccurred;
-    const scoreNext = s.score + scoreInc;                 // Apply any score gained this frame
+    const inContactNext = hit;                  // latch while colliding
+    const scoreNext     = s.score + scoreInc;
 
     // End when out of lives OR no more pipes to spawn and none left on screen
     const gameEnd =
